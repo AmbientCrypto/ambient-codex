@@ -1,0 +1,15 @@
+interface:
+  display_name: "Ambient Codex"
+  short_description: "Use Ambient models directly from Codex."
+  brand_color: "#1F6FEB"
+  default_prompt: "Use $ambient for this task."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ambient"
+      description: "Local Ambient Codex MCP server for bounded control, model, mode, settings, key, doctor, usage, and ask actions."
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

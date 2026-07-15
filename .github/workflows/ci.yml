@@ -1,0 +1,150 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.8", "3.10", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: plugins/ambient-codex
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile check
+        run: |
+          python -m compileall -q ambient_codex
+          python -m py_compile bin/ambient mcp/ambient_mcp.py scripts/ambient-codex-launcher.py
+      - name: Import checks
+        run: |
+          python -c "import importlib.machinery as m; m.SourceFileLoader('a','bin/ambient').load_module()"
+          python -c "import importlib.util as u; s=u.spec_from_file_location('m','mcp/ambient_mcp.py'); mod=u.module_from_spec(s); s.loader.exec_module(mod)"
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -q
+
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/ambient-codex
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.15.2 coverage==7.15.0
+      # `bin/ambient` is extensionless, so a bare `ruff check .` used to skip the whole
+      # CLI. pyproject's `extend-include` fixes that; name every runtime path anyway.
+      - name: Lint
+        run: ruff check bin/ambient mcp ambient_codex scripts tests
+      - name: Runtime line coverage (80% minimum)
+        run: |
+          coverage run -m unittest discover -s tests -t . -q
+          coverage report --include='bin/ambient,mcp/ambient_mcp.py,ambient_codex/*.py' --fail-under=80
+
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: plugins/ambient-codex
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Isolated venv install smoke
+        env:
+          AMBIENT_PACKAGING_TEST: "1"
+        run: python -m unittest tests.test_refactor_phase0.PackageInstallTests -v
+
+  no-node:
+    # The 1.5.x plugin booted its MCP server through a Node launcher that existed only
+    # to find python3, so Codex installs without Node (Homebrew, standalone) could never
+    # start it. Prove the server comes up on a box with no Node at all.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/ambient-codex
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: No Node artifacts remain
+        run: |
+          test ! -e mcp/ambient_mcp_launcher.js
+          ! grep -q '"node"' .mcp.json
+      - name: MCP server starts on a PATH that has python3 and nothing else
+        # Deleting the runner's node is unreliable -- GitHub images ship several
+        # (hostedtoolcache, /usr/local/bin, nvm), so removing one leaves another.
+        # Build the PATH instead: it holds exactly one binary, python3.
+        run: |
+          BIN="$(mktemp -d)"
+          ln -s "$(command -v python3)" "$BIN/python3"
+          env -i PATH="$BIN" python3 -c 'import shutil; assert shutil.which("node") is None'
+          env -i PATH="$BIN" HOME="$BIN" python3 - <<'PY'
+          import json, subprocess
+          cfg = json.load(open(".mcp.json"))["mcpServers"]["ambient"]
+          assert cfg["command"] == "python3", cfg
+          msgs = (
+              json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize",
+                          "params":{"protocolVersion":"2025-06-18","capabilities":{}}}) + "\n"
+              + json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list"}) + "\n"
+          )
+          out = subprocess.run([cfg["command"], *cfg["args"]], input=msgs, text=True,
+                               capture_output=True, timeout=60)
+          assert out.returncode == 0, out.stderr
+          frames = [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+          names = [t["name"] for t in frames[1]["result"]["tools"]]
+          assert "ambient_pick_model" in names, names
+          print(f"MCP server started with no Node; {len(names)} tools")
+          PY
+
+  plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/ambient-codex
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Version sync
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          pj = json.load(open(".codex-plugin/plugin.json"))["version"]
+          py = re.search(r'version\s*=\s*"([^"]+)"', open("pyproject.toml").read()).group(1)
+          amb = re.search(r'__version__ = "([^"]+)"', open("bin/ambient").read()).group(1)
+          # The MCP server reports its own version over the wire in `initialize`;
+          # leaving it out of this gate let it drift from the manifest unnoticed.
+          mcp = re.search(r'SERVER_VERSION = "([^"]+)"', open("mcp/ambient_mcp.py").read()).group(1)
+          base = pj.split("+", 1)[0]
+          if "+" in pj and not re.fullmatch(
+              re.escape(base) + r"\+codex\.[A-Za-z0-9][A-Za-z0-9.-]*", pj):
+              sys.exit(f"invalid Codex cachebuster: plugin.json={pj}")
+          if not (base == py == amb == mcp):
+              sys.exit(f"version drift: plugin.json={pj} pyproject={py} cli={amb} mcp={mcp}")
+          print(f"version {pj} (base {base}) in sync")
+          PY
+      - name: Manifests parse
+        run: |
+          python3 -c "import json; json.load(open('.codex-plugin/plugin.json')); json.load(open('.mcp.json')); json.load(open('hooks/hooks.json'))"
+      - name: Hook script parses
+        run: bash -n hooks/session-start.sh

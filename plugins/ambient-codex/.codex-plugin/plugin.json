@@ -1,0 +1,38 @@
+{
+  "name": "ambient-codex",
+  "version": "1.0.0",
+  "description": "Official Ambient Codex integration for chat, audits, code, and builds.",
+  "author": {
+    "name": "Ambient",
+    "url": "https://ambient.xyz"
+  },
+  "homepage": "https://github.com/AmbientCrypto/ambient-codex",
+  "repository": "https://github.com/AmbientCrypto/ambient-codex",
+  "license": "MIT",
+  "keywords": [
+    "ambient",
+    "codex",
+    "plugin",
+    "inference",
+    "code-review",
+    "delegation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Ambient Codex",
+    "shortDescription": "Use Ambient models directly from Codex.",
+    "longDescription": "Official Ambient integration for Codex with chat, model selection, audits, code generation, builds, repository maps, and delegation. Hooks are not registered by default.",
+    "developerName": "Ambient",
+    "category": "Productivity",
+    "capabilities": [
+      "skills",
+      "mcp",
+      "local-cli"
+    ],
+    "websiteURL": "https://ambient.xyz",
+    "privacyPolicyURL": "https://github.com/AmbientCrypto/ambient-codex/blob/main/plugins/ambient-codex/PRIVACY.md",
+    "brandColor": "#1F6FEB",
+    "defaultPrompt": "Use Ambient for this task."
+  },
+  "mcpServers": "./.mcp.json"
+}

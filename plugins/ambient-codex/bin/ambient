@@ -1,0 +1,791 @@
+#!/usr/bin/env python3
+# ruff: noqa: F401 -- declarative dependency bindings resolve facade names late
+"""Ambient CLI for model-aware ask, audit, map, code, build, and agent work.
+
+Run ``ambient-codex -h`` or a subcommand's ``-h`` for the complete interface.
+Large inputs use bounded map-reduce; builds use resumable manifest-first batches
+and write only with ``--apply``. Credentials remain private. Concrete models are
+never silently replaced; auto/fallback require explicit delegation. Exit codes:
+0 ok; 1 error; 2 partial; 3 unconfigured; 64 usage; 130 interrupted. Public
+output is token-only; relative savings are opt-in and money is never displayed.
+"""
+
+import argparse
+import ast
+import concurrent.futures  # noqa: F401 -- public test/patch seam
+import contextlib
+import dataclasses
+import difflib
+import fnmatch
+import io
+import json
+import os
+import random
+import re
+import select
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def _prepend_bundled_package_root():
+    """Prefer the package shipped beside this script in source/plugin installs.
+
+    A normal Python package install finds ``ambient_codex`` in site-packages.
+    Codex plugin and source-checkout execution instead place it one directory
+    above this extensionless script, so add that root without mutating the
+    existing sys.path list in place.
+    """
+    script_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    package_init = os.path.join(script_root, "ambient_codex", "__init__.py")
+    if not os.path.isfile(package_init):
+        return
+    normalized_root = os.path.normcase(os.path.realpath(script_root))
+    remaining = [
+        item for item in sys.path
+        if os.path.normcase(os.path.realpath(item or os.curdir)) != normalized_root
+    ]
+    sys.path = [script_root, *remaining]
+
+
+_prepend_bundled_package_root()
+from ambient_codex import LAYOUT_VERSION as INTERNAL_PACKAGE_LAYOUT  # noqa: E402, F401
+from ambient_codex import PACKAGE_NAME as INTERNAL_PACKAGE_NAME  # noqa: E402, F401
+from ambient_codex.constants import (  # noqa: E402
+    ABS_MAX_CHARS,
+    AMBIENT_CODEX_HOME_ENV,
+    ANSI_RE,
+    ANSWER_TOKENS_RESERVE,
+    API_KEY_ENV,
+    CHARS_PER_TOKEN,
+    CHUNK_CHARS,
+    CODE_MAP_BUDGET_DEFAULT,
+    CODE_MAP_BUDGET_MAX,
+    CODE_MAP_SIGS_PER_FILE,
+    CONTEXT_OVERHEAD_TOKENS,
+    CTRL_RE,
+    DEFAULT_API_URL,
+    DEFAULT_CODE_MODEL,
+    DEFAULT_MAX_TOKENS as DEFAULT_MAX_TOKENS,
+    DEFAULT_MODEL,
+    DEFAULT_TIMEOUT_S,
+    EXIT_PARTIAL,
+    EXIT_UNCONFIGURED,
+    EXIT_USAGE,
+    FALLBACK_CONTEXT,
+    FALLBACK_MAX_OUTPUT,
+    HEARTBEAT_S,
+    INPUT_TOKEN_SAFETY,
+    KEYCHAIN_ACCOUNT,
+    KEYCHAIN_SERVICE,
+    KEY_CONSOLE_URL,
+    LAUNCHER_NAME,
+    MAX_AUTO_BUDGET_TOKENS,
+    MAX_PARALLEL_CHUNKS,
+    MAX_REQUESTED_TOKENS,
+    MIN_OUTPUT_TOKENS,
+    MIN_REASONING_CHUNK,
+    NONREASONING_CONTEXT_MARGIN,
+    NONREASONING_OUTPUT_BUDGET,
+    OUTPUT_SAFETY,
+    REASONING_CHUNK_FACTOR,
+    REASONING_EXPANSION,
+    REASONING_SINGLE_SHOT_CHARS,
+    REPO_FILE_MAX_BYTES,
+    REPO_LOCKFILES,
+    REPO_SKIP_DIRS,
+    SHARED_API_KEY_ENV,
+    SIG_SCAN_LINE_MAX,
+    SINGLE_SHOT_MAX_CHARS_DEFAULT,
+    STATE_MARKER,
+    STREAM_LINE_MAX,
+    SUPPORT_LINE,
+    TELEMETRY_CPT_MAX,
+    TELEMETRY_CPT_MIN,
+    TELEMETRY_EWMA_ALPHA,
+)
+from ambient_codex.records import (  # noqa: E402
+    ChatError,
+    ModelProfile,
+    NetworkError,
+    StallError,
+)
+from ambient_codex import config_store as _config_store  # noqa: E402
+from ambient_codex import cache_store as _cache_store  # noqa: E402
+from ambient_codex import capability_runtime as _capability_runtime  # noqa: E402
+from ambient_codex import catalog_command as _catalog_command  # noqa: E402
+from ambient_codex import ask_command as _ask_command  # noqa: E402
+from ambient_codex import audit_core as _audit_core  # noqa: E402
+from ambient_codex import audit_command as _audit_command  # noqa: E402
+from ambient_codex import audit_hook_command as _audit_hook_command  # noqa: E402
+from ambient_codex import audit_inputs as _audit_inputs  # noqa: E402
+from ambient_codex import audit_prompts as _audit_prompts  # noqa: E402
+from ambient_codex import audit_prose as _audit_prose  # noqa: E402
+from ambient_codex import audit_planning as _audit_planning  # noqa: E402
+from ambient_codex import agent_config as _agent_config  # noqa: E402
+from ambient_codex import agent_command as _agent_command  # noqa: E402
+from ambient_codex import build_apply as _build_apply  # noqa: E402
+from ambient_codex import build_command as _build_command  # noqa: E402
+from ambient_codex import build_state_command as _build_state_command  # noqa: E402
+from ambient_codex import build_workflow as _build_workflow  # noqa: E402
+from ambient_codex import chat_workflow as _chat_workflow  # noqa: E402
+from ambient_codex import client_facade as _client_facade  # noqa: E402
+from ambient_codex import chunking as _chunking  # noqa: E402
+from ambient_codex import cli_dispatch as _cli_dispatch  # noqa: E402
+from ambient_codex import cli_entrypoint as _cli_entrypoint  # noqa: E402
+from ambient_codex import cli_commands as _cli_commands  # noqa: E402
+from ambient_codex import cli_parser as _cli_parser  # noqa: E402
+from ambient_codex import completion_command as _completion_command  # noqa: E402
+from ambient_codex import context_command as _context_command  # noqa: E402
+from ambient_codex import cost_runtime as _cost_runtime  # noqa: E402
+from ambient_codex import code_workflow as _code_workflow  # noqa: E402
+from ambient_codex import launcher as _launcher  # noqa: E402
+from ambient_codex import launcher_command as _launcher_command  # noqa: E402
+from ambient_codex import maintenance_commands as _maintenance_commands  # noqa: E402
+from ambient_codex import credentials as _credentials_core  # noqa: E402
+from ambient_codex import doctor_command as _doctor_command  # noqa: E402
+from ambient_codex import generation_commands as _generation_commands  # noqa: E402
+from ambient_codex import facade_adapters as _facade_adapters  # noqa: E402
+from ambient_codex import intake as _intake_core  # noqa: E402
+from ambient_codex import map_reduce as _map_reduce_core  # noqa: E402
+from ambient_codex import map_reduce_command as _map_reduce_command  # noqa: E402
+from ambient_codex import map_command as _map_command  # noqa: E402
+from ambient_codex import map_workflow as _map_workflow  # noqa: E402
+from ambient_codex import model_config as _model_config  # noqa: E402
+from ambient_codex import model_budget as _model_budget  # noqa: E402
+from ambient_codex import model_profiles as _model_profiles  # noqa: E402
+from ambient_codex import model_runtime as _model_runtime  # noqa: E402
+from ambient_codex import output_schema as _output_schema  # noqa: E402
+from ambient_codex import output_command as _output_command  # noqa: E402
+from ambient_codex import presentation_command as _presentation_command  # noqa: E402
+from ambient_codex import response_errors as _response_errors  # noqa: E402
+from ambient_codex import repository as _repository_core  # noqa: E402
+from ambient_codex import routing as _routing_core  # noqa: E402
+from ambient_codex import routing_runtime as _routing_runtime  # noqa: E402
+from ambient_codex import runtime_command as _runtime_command  # noqa: E402
+from ambient_codex import secrets as _secrets_core  # noqa: E402
+from ambient_codex import session_state as _session_state  # noqa: E402
+from ambient_codex import settings_commands as _settings_commands  # noqa: E402
+from ambient_codex import setup_command as _setup_command  # noqa: E402
+from ambient_codex import state as _state_core  # noqa: E402
+from ambient_codex import streaming as _streaming  # noqa: E402
+from ambient_codex import stream_redactor as _stream_redactor  # noqa: E402
+from ambient_codex import transport as _transport  # noqa: E402
+from ambient_codex import telemetry as _telemetry_core  # noqa: E402
+from ambient_codex import usage_store as _usage_store  # noqa: E402
+from ambient_codex import usage_report as _usage_report  # noqa: E402
+from ambient_codex import usage_runtime as _usage_runtime  # noqa: E402
+from ambient_codex import usage_pricing as _usage_pricing  # noqa: E402
+
+# Compatibility aliases for schema/prompt constants now owned by the focused
+# generation module. Existing tests and adapters patch these facade names.
+CHAT_HELP = _generation_commands.CHAT_HELP
+BUILD_PLAN_SCHEMA = _generation_commands.BUILD_PLAN_SCHEMA
+BUILD_FILES_SCHEMA = _generation_commands.BUILD_FILES_SCHEMA
+BUILD_PLAN_PROMPT = _generation_commands.BUILD_PLAN_PROMPT
+BUILD_JSON_INSTRUCTION_PLAN = _generation_commands.BUILD_JSON_INSTRUCTION_PLAN
+BUILD_GEN_PROMPT = _generation_commands.BUILD_GEN_PROMPT
+BUILD_JSON_INSTRUCTION_FILES = _generation_commands.BUILD_JSON_INSTRUCTION_FILES
+AUDIT_FINDINGS_SCHEMA = _map_command.AUDIT_FINDINGS_SCHEMA
+AUDIT_JSON_INSTRUCTION = _map_command.AUDIT_JSON_INSTRUCTION
+AUDIT_SYNTH_PROMPT = _map_command.AUDIT_SYNTH_PROMPT
+
+try:
+    import fcntl  # POSIX-only; Windows uses a portable lock-file fallback (B1)
+except ImportError:
+    fcntl = None
+
+__version__ = "1.0.0"  # kept in sync with plugin.json + pyproject.toml (test- and CI-asserted)
+
+# Trees another Ambient install (or its host agent) owns. We never place our state
+# inside any of them, at any depth.
+FOREIGN_STATE_DIRS = (
+    os.path.expanduser("~/.config/ambient"),
+    os.path.expanduser("~/.claude"),
+)
+
+
+def _runtime_dependencies():
+    names = (
+        "AMBIENT_CODEX_HOME_ENV", "API_KEY_ENV", "CONFIG_PATH",
+        "DEFAULT_API_URL", "EXIT_UNCONFIGURED", "FOREIGN_STATE_DIRS",
+        "KEYCHAIN_ACCOUNT", "KEYCHAIN_SERVICE", "KEY_CONSOLE_URL",
+        "LAUNCHER_NAME", "MAX_REQUESTED_TOKENS", "SHARED_API_KEY_ENV",
+        "STATE_DIR", "STATE_MARKER", "__version__", "_argv_command",
+        "_config_store", "_credentials_core", "_fail_exit",
+        "_is_local_host", "_state_core", "argparse", "cmd_setup",
+        "keychain_read", "os", "read_config_file", "resolve_api_url",
+        "resolve_key_and_backend", "save_config_values", "secret_backend",
+        "shutil", "subprocess", "sys", "urllib", "validate_state_root",
+    )
+    early = {
+        "AMBIENT_CODEX_HOME_ENV": AMBIENT_CODEX_HOME_ENV,
+        "EXIT_UNCONFIGURED": EXIT_UNCONFIGURED,
+        "FOREIGN_STATE_DIRS": FOREIGN_STATE_DIRS,
+        "KEYCHAIN_ACCOUNT": KEYCHAIN_ACCOUNT,
+        "MAX_REQUESTED_TOKENS": MAX_REQUESTED_TOKENS,
+        "STATE_MARKER": STATE_MARKER,
+        "_credentials_core": _credentials_core,
+        "_state_core": _state_core,
+    }
+    return _runtime_command.RuntimeDependencies.bind(
+        **{**{name: globals().get(name) for name in names}, **early})
+
+
+(_resolve, _is_within, foreign_root, validate_state_root, _state_dir, _claim_state_dir, _env_pos_int, normalize_requested_max_tokens, secret_backend, keychain_available, keychain_write, keychain_delete, shared_key_env_is_set, resolve_key_and_backend, _is_local_host, resolve_api_url, cmd_trust_url, cmd_trust_url_reset, load_config) = _facade_adapters.build(
+    globals(), "_runtime_command", "_runtime_dependencies",
+    "_resolve _is_within foreign_root validate_state_root _state_dir _claim_state_dir _env_pos_int normalize_requested_max_tokens secret_backend keychain_available keychain_write keychain_delete shared_key_env_is_set resolve_key_and_backend _is_local_host resolve_api_url cmd_trust_url cmd_trust_url_reset load_config")
+
+
+STATE_DIR = _state_dir()
+CONFIG_PATH = os.path.join(STATE_DIR, "env")
+USAGE_PATH = os.path.join(STATE_DIR, "usage.jsonl")
+
+
+# Completions STREAM: liveness is judged by data flow, not total duration. A
+# healthy generation can run for ages; silence beyond the per-op timeout
+# (args.timeout, default 300s) means a hung worker and is caught immediately.
+# There is no elapsed-time wall by default. Operators who need a fixed policy
+# ceiling can opt in with AMBIENT_HARD_WALL_S; zero leaves progressing work
+# alone. AMBIENT_NOPROGRESS_S remains mandatory and catches wedged streams.
+HARD_WALL_S = _env_pos_int("AMBIENT_HARD_WALL_S", 0, floor=0)
+# A wedged worker can keep the socket alive (empty deltas / keep-alives) while
+# emitting NO new content or reasoning — that fools a pure silence timeout. If
+# nothing useful grows for this long, treat it as a stall.
+NOPROGRESS_S = _env_pos_int("AMBIENT_NOPROGRESS_S", 150, floor=10)
+# The streamed heartbeat ("…writing (N chars, Xs)") and the build phase lines
+# ("generating <paths> [X/Y]") are pure UX. This toggle gates ONLY their DISPLAY —
+# the smart inactivity/stall guards above are safety and stay enforced no matter
+# what, so silencing progress never weakens them. An explicitly configured hard
+# wall also remains active.
+# Default ON. Precedence: --progress/--no-progress flag > AMBIENT_PROGRESS env >
+# config file > on. Resolved once by main(); a module holder keeps stream_completion
+# (which has no args/conf) from re-reading config on every ~1s tick.
+_PROGRESS_DISPLAY = {"resolved": None}
+
+
+def _progress_from_env_or_conf(conf):
+    """AMBIENT_PROGRESS=off|0|false|no (env, then config) silences the display."""
+    raw = os.environ.get("AMBIENT_PROGRESS")
+    if raw is None:
+        raw = conf.get("AMBIENT_PROGRESS") if conf else None
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in ("off", "0", "false", "no")
+
+
+def _resolve_progress_display(args, conf):
+    """flag beats env beats config beats the on-default (see _PROGRESS_DISPLAY)."""
+    flag = getattr(args, "progress", None)   # store_true/false; absent → None
+    if flag is not None:
+        return bool(flag)
+    return _progress_from_env_or_conf(conf)
+
+
+def progress_display_enabled():
+    """Whether to SHOW streamed progress. Uses the value main() resolved; before
+    that (e.g. a direct unit-test call) it honors AMBIENT_PROGRESS so the env alone
+    always works. NEVER affects the hard-wall / no-progress / stall guards."""
+    v = _PROGRESS_DISPLAY["resolved"]
+    return _progress_from_env_or_conf(None) if v is None else v
+
+
+# Mutable telemetry memoization remains facade-owned until the state boundary
+# moves in Phase 2. All numeric tuning inputs come from ambient_codex.constants.
+_TELEMETRY_CPT_CACHE = None
+
+AUDIT_SYSTEM_PROMPT = _audit_prompts.AUDIT_SYSTEM_PROMPT
+
+
+def read_config_file():
+    return _runtime_command.read_config_file(
+        deps=_runtime_dependencies())
+
+
+def keychain_read():
+    return _runtime_command.keychain_read(
+        deps=_runtime_dependencies())
+
+
+_KEY_PLACEHOLDER = "[AMBIENT_API_KEY]"   # _StreamRedactor mirrors this exactly
+_MAX_ESCAPE_HOLD = 256                   # compact a held escape past this so
+_ESCAPE_KEEP_TAIL = 64                    # _raw (and each _stable_len rescan) stays
+#                                          small; a terminator is short + recent
+
+
+def _presentation_dependencies():
+    return _facade_adapters.bind(globals(), _presentation_command.PresentationDependencies.bind,
+                                 "ANSI_RE CONFIG_PATH CTRL_RE DEFAULT_CODE_MODEL DEFAULT_MODEL DEFAULT_MODEL_NOTES KEY_CONSOLE_URL LAUNCHER_NAME _KEY_PLACEHOLDER __version__ _claim_state_dir _config_lock _config_store _model_config _split_csv _use_color argparse curation fcntl fnmatch is_auto_model is_hidden json os re read_config_file ready_model_ids redact resolve_key_and_backend resolve_model sys time")
+
+
+(redact, sanitize, _stderr_is_tty, _use_color, paint, _config_lock, _private_dir, save_config_values, _split_csv, curation, is_hidden, note_if_hidden, build_banner, print_welcome_panel, key_paste_problem, model_map, resolve_model) = _facade_adapters.build(
+    globals(), "_presentation_command", "_presentation_dependencies",
+    "redact sanitize _stderr_is_tty _use_color paint _config_lock _private_dir save_config_values _split_csv curation is_hidden note_if_hidden build_banner print_welcome_panel key_paste_problem model_map resolve_model")
+
+
+class _StreamRedactor(_stream_redactor.StreamRedactor):
+    """Facade-compatible streaming redactor with late-bound sanitization."""
+
+    def __init__(self, api_key):
+        super().__init__(
+            api_key, redact, key_placeholder=_KEY_PLACEHOLDER,
+            max_escape_hold=_MAX_ESCAPE_HOLD,
+            escape_keep_tail=_ESCAPE_KEEP_TAIL,
+        )
+
+
+# Guidance shown wherever models are chosen; a user-set
+# note for the same id (ambient curate note) overrides, and an explicitly
+# cleared note stays cleared. Local config only — nothing fetched or sent.
+DEFAULT_MODEL_NOTES = {
+    "z-ai/glm-5.2": "network capacity ramping up — selectable, improving",
+}
+
+
+def _set_pricing_catalog(models):
+    global _PRICING_CATALOG
+    _PRICING_CATALOG = models
+
+
+def _model_runtime_dependencies():
+    return _facade_adapters.bind(globals(), _model_runtime.ModelRuntimeDependencies.bind,
+                                 "ANSWER_TOKENS_RESERVE ASSUMED_MAX_INPUT_PRICE ASSUMED_MAX_OUTPUT_PRICE BUILD_PLAN_SCHEMA NetworkError _catalog_data _cost_cpt _expected_output_tokens _model_config _retry_delay _transport _usage_pricing adaptive_response_format api_request cap_state downgrade_response_format error_message fetch_models model_pricing redact response_format_for set_pricing_catalog=_set_pricing_catalog sys time")
+
+
+(api_request, _catalog_data, fetch_models, _as_pos_int, _as_bool, ready_model_ids, safe_catalog, model_pricing, adaptive_response_format, downgrade_response_format, _served_model_of, build_plan_rf_ladder, _expected_output_tokens, estimate_cost) = _facade_adapters.build(
+    globals(), "_model_runtime", "_model_runtime_dependencies",
+    "api_request _catalog_data fetch_models _as_pos_int _as_bool ready_model_ids safe_catalog model_pricing adaptive_response_format downgrade_response_format _served_model_of build_plan_rf_ladder _expected_output_tokens estimate_cost")
+
+
+# Above every price observed in the live catalog — used as the worst-case
+# price when a model's real pricing is unknown, so cost estimates never
+# under-count.
+ASSUMED_MAX_INPUT_PRICE = 2.0    # per Mtok
+ASSUMED_MAX_OUTPUT_PRICE = 8.0   # per Mtok
+
+
+def _get_telemetry_cache():
+    return _TELEMETRY_CPT_CACHE
+
+
+def _set_telemetry_cache(value):
+    global _TELEMETRY_CPT_CACHE
+    _TELEMETRY_CPT_CACHE = value
+
+
+def _get_cap_cache():
+    return _CAP_CACHE
+
+
+def _set_cap_cache(value):
+    global _CAP_CACHE
+    _CAP_CACHE = value
+
+
+def _capability_dependencies():
+    return _facade_adapters.bind(globals(), _capability_runtime.CapabilityDependencies.bind,
+                                 "CAPABILITY_PATH CAP_FAIL_THRESHOLD CAP_RECENT_K CHARS_PER_TOKEN TELEMETRY_CPT_MAX TELEMETRY_CPT_MIN TELEMETRY_EWMA_ALPHA USAGE_PATH _cap_recent _load_caps _read_caps_file _telemetry_core _telemetry_enabled _try_caps_lock _write_caps fcntl get_cap_cache=_get_cap_cache get_telemetry_cache=_get_telemetry_cache json observed_cpt os set_cap_cache=_set_cap_cache set_telemetry_cache=_set_telemetry_cache tempfile time")
+
+
+(_telemetry_enabled, observed_cpt, _effective_cpt, _cost_cpt, _read_caps_file, _load_caps, _cap_recent, cap_state, _try_caps_lock, _write_caps, record_cap) = _facade_adapters.build(
+    globals(), "_capability_runtime", "_capability_dependencies",
+    "_telemetry_enabled observed_cpt _effective_cpt _cost_cpt _read_caps_file _load_caps _cap_recent cap_state _try_caps_lock _write_caps record_cap")
+
+
+# --- Adaptive capability learning --------------------------------
+# The catalog's advertised features are a HYPOTHESIS; a model's OBSERVED
+# behavior is the truth. We record per-model outcomes for capability
+# "dimensions" (e.g. structured_json, build_plan) from real runs and let the
+# tool start from the path that actually worked last time — instead of
+# hard-coding each model's quirks. Learned state RECOVERS on a later success
+# (models improve as network capacity ramps), so nothing is permanently
+# blacklisted. AMBIENT_TELEMETRY=off disables learning → the tool falls back to
+# advertised features, byte-identical to a fresh install.
+CAPABILITY_PATH = os.path.join(STATE_DIR, "capabilities.json")
+CAP_RECENT_K = 4          # outcomes remembered per (model, dimension)
+CAP_FAIL_THRESHOLD = 2    # recent fails (with no recent ok) => "unreliable"
+_CAP_CACHE = None
+
+
+# --- Savings receipts --------------------------------------------
+# The 10-40x-cheaper value proposition was invisible: no run ever showed a
+# dollar figure or a vs-frontier comparison. These helpers price a finished
+# run from the catalog and compare it against a FRONTIER REFERENCE price
+# (AMBIENT_REFERENCE_PRICE, env > config), defaulting to a representative
+# frontier list price. Honesty contract — savings are NEVER over-stated:
+# unpriced models use worst-case ASSUMED cost and claim no saving at all,
+# saved-% is floored, estimated token counts are labeled, and a model at or
+# above the reference says "costlier".
+
+# Default frontier reference, per Mtok (input, output). This is an
+# APPROXIMATION — a representative frontier list price (e.g. Claude Sonnet's
+# 3/15 list rate) — set AMBIENT_REFERENCE_PRICE to your own baseline
+# ("in/out" pair like "3/15", or a single blended per Mtok).
+REFERENCE_PRICE_DEFAULT = (3.0, 15.0)
+_REF_CACHE = None       # resolved reference price, memoized per process
+_PRICING_CATALOG = []   # last successfully fetched catalog (pricing memo)
+
+
+def _get_ref_cache():
+    return _REF_CACHE
+
+
+def _set_ref_cache(value):
+    global _REF_CACHE
+    _REF_CACHE = value
+
+
+def _get_pricing_catalog():
+    return _PRICING_CATALOG
+
+
+def _get_savings_cache():
+    return _SAVINGS_CACHE
+
+
+def _set_savings_cache(value):
+    global _SAVINGS_CACHE
+    _SAVINGS_CACHE = value
+
+
+def _usage_runtime_dependencies():
+    return _facade_adapters.bind(globals(), _usage_runtime.UsageRuntimeDependencies.bind,
+                                 "ASSUMED_MAX_INPUT_PRICE ASSUMED_MAX_OUTPUT_PRICE REFERENCE_PRICE_DEFAULT _as_pos_int _lock_owner_dead _pid_alive _savings_enabled _usage_pricing fcntl get_pricing_catalog=_get_pricing_catalog get_ref_cache=_get_ref_cache get_savings_cache=_get_savings_cache os parse_reference_price read_config_file resolve_reference_price set_ref_cache=_set_ref_cache set_savings_cache=_set_savings_cache time")
+
+
+(parse_reference_price, resolve_reference_price, usage_cost, reference_cost, _savings_enabled, savings_note, savings_note_by_served, _lock_owner_dead, _fs_lock, _pid_alive) = _facade_adapters.build(
+    globals(), "_usage_runtime", "_usage_runtime_dependencies",
+    "parse_reference_price resolve_reference_price usage_cost reference_cost _savings_enabled savings_note savings_note_by_served _lock_owner_dead _fs_lock _pid_alive")
+
+
+_SAVINGS_CACHE = None
+
+
+# --- Cross-process file lock (usage ledger) --------------------
+# The usage ledger appends under a fail-open cross-process lock so a crash
+# mid-write never leaves a torn store; a bounded wait keeps it from ever
+# blocking a legitimate call.
+_LEDGER_LOCK_WAIT_S = 2.0     # bounded wait for the usage-ledger lock
+
+
+def _cost_dependencies():
+    return _facade_adapters.bind(globals(), _cost_runtime.CostDependencies.bind,
+                                 "ASSUMED_MAX_INPUT_PRICE ASSUMED_MAX_OUTPUT_PRICE RequestSpec _as_bool _as_pos_int _batch_fallback_alt _cost_cpt _expected_output_tokens _fallback_enabled _fb_alt_budget _fb_call_cost _lane_pricing argparse contextlib curation estimate_cost estimate_cost_mr io is_hidden model_pricing model_profile os pick_fallback_model resolve_model sys")
+
+
+(_lane_pricing, _fallback_enabled, _batch_fallback_alt, _fb_call_cost, _fb_alt_budget, estimate_cost_fb, estimate_cost_mr_fb, estimate_cost_mr, pick_fallback_model) = _facade_adapters.build(
+    globals(), "_cost_runtime", "_cost_dependencies",
+    "_lane_pricing _fallback_enabled _batch_fallback_alt _fb_call_cost _fb_alt_budget estimate_cost_fb estimate_cost_mr_fb estimate_cost_mr pick_fallback_model")
+
+
+# --- Advisory routing ------------------------------------------
+# Everything here is either the user EXPLICITLY delegating selection (they
+# typed `-m auto…` / saved it with `ambient use auto`), purely ADVISORY (a
+# stderr hint that changes nothing), or the user's own explicit config
+# (AMBIENT_MODEL_MAP / --reduce-model). A concrete -m model is NEVER swapped.
+
+AUTO_MODEL_SPECS = ("auto", "auto:cheapest", "auto:largest")
+
+
+def _routing_dependencies():
+    return _facade_adapters.bind(globals(), _routing_runtime.RoutingDependencies.bind,
+                                 "ANSWER_TOKENS_RESERVE ASSUMED_MAX_OUTPUT_PRICE CHARS_PER_TOKEN CONTEXT_OVERHEAD_TOKENS FALLBACK_CONTEXT FALLBACK_MAX_OUTPUT INPUT_TOKEN_SAFETY MAX_AUTO_BUDGET_TOKENS MIN_OUTPUT_TOKENS MIN_REASONING_CHUNK ModelProfile NONREASONING_CONTEXT_MARGIN NONREASONING_OUTPUT_BUDGET OUTPUT_SAFETY REASONING_CHUNK_FACTOR REASONING_EXPANSION REASONING_SINGLE_SHOT_CHARS SINGLE_SHOT_MAX_CHARS_DEFAULT _argv_command _as_bool _as_pos_int _catalog_out_price _context_safe_escalation_ceiling _effective_cpt _fail_exit _humanize_ctx _model_budget _model_budget_constants _model_profile_constants _model_profiles _resolve_output_budget _routing_core _validate_reduce_id curation difflib is_auto_model is_hidden model_map model_pricing model_profile os preflight_hint ready_model_ids resolve_auto_model resolve_model single_shot_max_chars sys")
+
+
+(is_auto_model, _catalog_out_price, resolve_auto_model, preflight_hint, route_model, _validate_reduce_id, resolve_reduce_model, response_format_for, _model_budget_constants, _model_profile_constants, _reasoning_output_budget, _context_safe_output_cap, _context_safe_escalation_ceiling, single_shot_max_chars, _reasoning_single_shot_target, model_profile, _resolve_output_budget, apply_output_budget) = _facade_adapters.build(
+    globals(), "_routing_runtime", "_routing_dependencies",
+    "is_auto_model _catalog_out_price resolve_auto_model preflight_hint route_model _validate_reduce_id resolve_reduce_model response_format_for _model_budget_constants _model_profile_constants _reasoning_output_budget _context_safe_output_cap _context_safe_escalation_ceiling single_shot_max_chars _reasoning_single_shot_target model_profile _resolve_output_budget apply_output_budget")
+
+
+(error_message, classify_error, auth_probe, refuse_if_secrets, _retry_delay, _cache_key, _cache_get, _cache_put, log_usage, usage_exit, stream_completion, _session_or, _completion_dependencies, complete, chat) = _client_facade.build(
+    globals(), "error_message classify_error auth_probe refuse_if_secrets _retry_delay _cache_key _cache_get _cache_put log_usage usage_exit stream_completion _session_or _completion_dependencies complete chat")
+
+
+# Compatibility aliases: implementation ownership lives in ambient_codex.secrets.
+_SECRET_COMPAT = "SECRET_PATTERNS _LOOSE_LABEL_RE _PRECISE_SECRET_PATTERNS _LOOSE_CODE_VALUE_RE _LOOSE_TYPE_VALUE_RE CREDS_IN_URL_RE ENV_ASSIGN_RE _ENV_STRONG_COMPONENT_RE _ENV_STRONG_SUBSTR_RE _ENV_STRONG_CAMEL_RE _ENV_CONFIG_SUFFIX_RE _ENV_SECRET_REF_RE _ENV_SECRET_REF_LINE_RE _ENV_SENSITIVE_KEY_RE _PUBLIC_KEY_IDENT_RE _ENV_HIGH_ENTROPY_RE _ENV_PASSWORDISH_RE _ENV_PATH_VALUE_RE _ENV_INTERP_RE _SECRET_VALUE_HINT_RE _CODE_VALUE_RE _CODE_REF_ASSIGN_RE _CODE_TAIL _ENV_CODE_VALUE_RE _ENV_CMDSUB_RE SECRET_NAMES_RE".split()  # pragma: allowlist secret
+globals().update({name: getattr(_secrets_core, name) for name in _SECRET_COMPAT})
+
+_env_is_strong = _secrets_core.env_is_strong
+_value_looks_nonsecret = _secrets_core.value_looks_nonsecret
+_env_assignment_is_secret = _secrets_core.env_assignment_is_secret
+_line_has_secret = _secrets_core.line_has_secret
+
+
+USAGE_MAX_BYTES = 5_000_000  # cap the ledger; trim oldest lines past this
+USAGE_TRIM_KEEP_LINES = 20_000  # how many newest ledger lines a trim keeps
+
+
+CACHE_DIR = os.path.join(STATE_DIR, "cache")
+CACHE_MAX_FILES = 4000            # LRU-ish cap; oldest pruned past this
+CACHE_TTL_DEFAULT = 7 * 86400     # a cached chunk older than this is ignored
+
+
+class Session(_session_state.Session):
+    """Facade session whose catalog loader remains late-bound for tests."""
+
+    def _load_catalog(self):
+        return safe_catalog(self.api_url, self.api_key)
+
+
+class RequestSpec(_session_state.RequestSpec):
+    def with_output_budget(self, profile, input_chars=None):
+        return self.with_budget_policy(
+            profile, input_chars,
+            resolve_output_budget=_resolve_output_budget,
+            context_safe_escalation_ceiling=_context_safe_escalation_ceiling,
+            effective_cpt=_effective_cpt,
+        )
+
+
+AttemptState = _session_state.AttemptState
+DEFAULT_BUDGET_ESCALATIONS = _session_state.DEFAULT_BUDGET_ESCALATIONS
+MAX_BUDGET_ESCALATIONS = _session_state.MAX_BUDGET_ESCALATIONS
+MAX_COMPLETE_ATTEMPTS = _session_state.MAX_COMPLETE_ATTEMPTS
+_reasoning_str = _session_state.reasoning_str
+_budget_escalation_limit = _session_state.budget_escalation_limit
+
+
+STDIN_WAIT_S = 10  # how long to wait for piped data before treating stdin as empty
+STDIN_WAIT_MAX_S = 60  # hostile/accidental env overrides must never wait forever
+
+
+_C_KEYWORDS = _context_command._C_KEYWORDS
+_C_TYPE_SIGNATURE_MARKERS = _context_command._C_TYPE_SIGNATURE_MARKERS
+_C_MODS = _context_command._C_MODS
+_SIG_PATTERNS = _context_command._SIG_PATTERNS
+_SIG_EXT = _context_command._SIG_EXT
+_CHUNK_IDX_TOKEN = _context_command._CHUNK_IDX_TOKEN
+
+
+(_context_dependencies, _map_reduce_dependencies, run_map_reduce, _output_dependencies, _reasoning_hint, render_result, _public_usage, emit_json, _json_mode, _json_in_argv, emit_json_error, _fail, _argv_command, _fail_exit, _humanize_ctx, _catalog_dependencies, _model_badges, format_model_line, _dedupe_catalog, _dedupe_catalog_ids, cmd_models, cmd_use, cmd_curate, _ask_dependencies, cmd_ask, _resolve_best_of, select_best_sample, _best_of_chat, _answers_agreement, _ask_consensus, _read_map_item, _map_gather_items, _emit_map_result, _map_dependencies, cmd_map, _audit_input_dependencies, _audit_hook_dependencies, _render_hook, _git_hooks_dir, _hook_is_ours, cmd_audit_hook, _audit_planning_dependencies, _audit_sample_prep, _audit_single_key, run_one_audit, _audit_split_estimate, _parse_consensus_models, _consensus_estimate, _best_of_audit_misses, _print_repo_plan, _audit_dependencies, cmd_audit, _generation_dependencies, cmd_code, _stdin_is_tty, _chat_input, _trim_chat_history, cmd_chat, _build_state_dependencies, _parse_file_records, _within_root, safe_relpath, _build_state_path, build_resume_identity, _save_build_state, _load_build_state, _build_dependencies, cmd_build, cmd_mode, _config_fmt_num, _config_norm_bool, _config_norm_price, _config_names, _config_env_shadow_note, _config_redact, _config_curation_summary, _config_print_status, _settings_dependencies, cmd_config, _control_catalog, _control_settings, _control_setting_names, _control_model_item, _control_snapshot, _control_print_status, _control_print_key_status, _control_setup_instruction, _control_key, _control_model, _control_setting, _control_menu, _control_dependencies, cmd_control, _collect_key_interactive, _verify_and_store_key, _setup_remove, _setup_dependencies, cmd_setup, _doctor_dependencies, cmd_doctor, _print_empty_usage, _usage_dependencies, cmd_usage, _this_script, _bundled_cli_path, _link_is_ours, _shim_is_ours, _stable_launcher_asset, _stable_launcher_is_ours, _write_stable_launcher, _launcher_dependencies, cmd_link, cmd_cache, ensure_opencode_config, _agent_dependencies, cmd_agent, cmd_codex) = _cli_commands.build(
+    globals(), "_context_dependencies _map_reduce_dependencies run_map_reduce _output_dependencies _reasoning_hint render_result _public_usage emit_json _json_mode _json_in_argv emit_json_error _fail _argv_command _fail_exit _humanize_ctx _catalog_dependencies _model_badges format_model_line _dedupe_catalog _dedupe_catalog_ids cmd_models cmd_use cmd_curate _ask_dependencies cmd_ask _resolve_best_of select_best_sample _best_of_chat _answers_agreement _ask_consensus _read_map_item _map_gather_items _emit_map_result _map_dependencies cmd_map _audit_input_dependencies _audit_hook_dependencies _render_hook _git_hooks_dir _hook_is_ours cmd_audit_hook _audit_planning_dependencies _audit_sample_prep _audit_single_key run_one_audit _audit_split_estimate _parse_consensus_models _consensus_estimate _best_of_audit_misses _print_repo_plan _audit_dependencies cmd_audit _generation_dependencies cmd_code _stdin_is_tty _chat_input _trim_chat_history cmd_chat _build_state_dependencies _parse_file_records _within_root safe_relpath _build_state_path build_resume_identity _save_build_state _load_build_state _build_dependencies cmd_build cmd_mode _config_fmt_num _config_norm_bool _config_norm_price _config_names _config_env_shadow_note _config_redact _config_curation_summary _config_print_status _settings_dependencies cmd_config _control_catalog _control_settings _control_setting_names _control_model_item _control_snapshot _control_print_status _control_print_key_status _control_setup_instruction _control_key _control_model _control_setting _control_menu _control_dependencies cmd_control _collect_key_interactive _verify_and_store_key _setup_remove _setup_dependencies cmd_setup _doctor_dependencies cmd_doctor _print_empty_usage _usage_dependencies cmd_usage _this_script _bundled_cli_path _link_is_ours _shim_is_ours _stable_launcher_asset _stable_launcher_is_ours _write_stable_launcher _launcher_dependencies cmd_link cmd_cache ensure_opencode_config _agent_dependencies cmd_agent cmd_codex")
+
+
+(read_stdin_if_piped, _stdin_read_and_decode, _read_stdin_bounded, warn_if_stdin_ignored, read_files, files_block, _chunk_ranges, code_map_budget, _sigs_python, _sigs_regex, _file_signatures, build_code_map, _py_break_lines, density_factor, _chunk_break_lines, pack_chunks, _resolve_parallel, _reduce_response_format, _map_note) = _facade_adapters.build(
+    globals(), "_context_command", "_context_dependencies",
+    "read_stdin_if_piped _stdin_read_and_decode _read_stdin_bounded warn_if_stdin_ignored read_files files_block _chunk_ranges code_map_budget _sigs_python _sigs_regex _file_signatures build_code_map _py_break_lines density_factor _chunk_break_lines pack_chunks _resolve_parallel _reduce_response_format _map_note")
+
+
+CATALOG_ALIAS_OF = _catalog_command.CATALOG_ALIAS_OF
+
+
+BEST_OF_MAX = _ask_command.BEST_OF_MAX
+BEST_OF_TEMPERATURE = _ask_command.BEST_OF_TEMPERATURE
+BEST_OF_WEAK_TEMP = _ask_command.BEST_OF_WEAK_TEMP
+
+
+# --------------------------------------------------------------------------
+# `ambient map` — the bulk per-item inference lane. ONE prompt
+# applied INDEPENDENTLY to MANY items: each file/stdin-line is its own
+# complete() call (NOT map-reduce — no synthesis pass), streamed out as it
+# finishes, resumable via the content-addressed cache. map only READS
+# items and PRINTS results — it never writes files and never executes
+# model output.
+
+MAP_OVERSIZE_MSG = ("input too large for map — use ambient-codex audit for large "
+                    "files (map is one single-shot call per item)")
+
+
+SEVERITY_ORDER = _audit_core.SEVERITY_ORDER
+_NON_FILE_LABELS = frozenset({
+    "focus", "DIFF (git)", "DIFF / CODE (stdin)", "REPO COVERAGE NOTE",
+})
+
+
+(extract_json, _finding_sig, _titles_match, parse_audit_object, dedupe_findings, _verdict_from, findings_reducer, _text_has_unparsed_finding, parse_prose_findings, render_findings, with_line_gutters, _repo_candidate_paths, repo_walk, _guttered_size, repo_audit_inputs, cross_file_suspects, run_cross_file_pass, git_diff_inputs) = _facade_adapters.build(
+    globals(), "_audit_inputs", "_audit_input_dependencies",
+    "extract_json _finding_sig _titles_match parse_audit_object dedupe_findings _verdict_from findings_reducer _text_has_unparsed_finding parse_prose_findings render_findings with_line_gutters _repo_candidate_paths repo_walk _guttered_size repo_audit_inputs cross_file_suspects run_cross_file_pass git_diff_inputs")
+
+
+# --------------------------------------------------------------------------
+# `audit --install-hook`. The hook is a FIXED, compiled-in
+# shell script: it RUNS `ambient audit` on the staged/outgoing diff and greps
+# the verdict — it never contains, and can never contain, model output (the
+# SKILL trust boundary: model output is data, never code that runs).
+
+AMBIENT_HOOK_MARKER = "# ambient-codex audit hook v1"
+LEGACY_AMBIENT_HOOK_MARKERS = ()  # never claim another install's hook
+
+
+# ── ambient config: one clean home for user settings (no env editing) ──────
+# Every write goes through save_config_values (atomic, 0600, merge-preserving);
+# every read uses the SAME env-or-config resolvers the rest of the CLI already
+# uses, so a `config set` takes effect with NO reader change. set/unset may touch
+# ONLY the CONFIG_SETTINGS whitelist below — never the model/mode/curation/
+# endpoint/key keys (those keep their own commands). The API key is never a config
+# value: it can only be set via `ambient-codex setup` (hidden input, user's terminal).
+
+
+# Whitelist: friendly name → (env key, validator/normalizer, default, current
+# reader, value-syntax hint). This tuple is the ONLY set of keys set/unset can
+# write — the guarantee that a settings change can never clobber another command's
+# config. current() reads the SAME resolver the CLI uses at runtime (zero network).
+CONFIG_SETTINGS = (
+    {"name": "streaming", "env": "AMBIENT_PROGRESS", "default": "on", "how": "on|off",
+     "validate": _config_norm_bool,
+     "current": lambda conf: "on" if _progress_from_env_or_conf(conf) else "off"},
+    {"name": "fallback", "env": "AMBIENT_FALLBACK", "default": "off", "how": "on|off",
+     "validate": _config_norm_bool,
+     "current": lambda conf: "on" if str(
+         os.environ.get("AMBIENT_FALLBACK") or conf.get("AMBIENT_FALLBACK") or ""
+     ).strip().lower() in ("1", "on", "true") else "off"},
+    {"name": "reference-price", "env": "AMBIENT_REFERENCE_PRICE", "default": "3/15",
+     "how": "<in/out>", "validate": _config_norm_price,
+     "current": lambda conf: "/".join(
+         _config_fmt_num(x) for x in resolve_reference_price(conf))},
+    {"name": "savings", "env": "AMBIENT_SAVINGS", "default": "off", "how": "on|off",
+     "validate": _config_norm_bool,
+     "current": lambda conf: "on" if _savings_enabled(conf) else "off"},
+)
+_CONFIG_BY_NAME = {s["name"]: s for s in CONFIG_SETTINGS}
+
+
+# ── ambient control: Codex-native settings panel and safe state router ─────
+# Printed for the user to copy-paste. They MUST name this install's launcher: a bare
+# `ambient` on PATH may belong to a different Ambient install, and pasting
+# `ambient-codex control mode on` would flip that install's mode instead of this one's.
+CONTROL_ACTIONS = tuple(
+    f"{LAUNCHER_NAME} {suffix}".rstrip()
+    for suffix in (
+        "control",
+        "control mode on",
+        "control mode takeover",
+        "control mode off",
+        "control model MODEL",
+        "control model MODEL --chat",
+        "control model MODEL --code",
+        "models --json",
+        "setup",
+        "setup --force",
+        "setup --remove",
+        "control setting streaming on|off",
+        "control setting fallback on|off",
+        "control setting savings on|off",
+        "ask PROMPT",
+        "audit --staged --json",
+        "audit FILE... --json",
+        "audit --repo DIR --json",
+        "code TASK --json",
+        "build TASK --dir DIR --json",
+        "doctor",
+        "usage --json",
+        "agent",
+    )
+)
+
+CONTROL_SETTING_NAMES = ("streaming", "fallback", "savings")
+
+CONTROL_MODE_OPTIONS = (
+    ("off", "Off", "Codex works normally; Ambient runs only when you ask."),
+    ("on", "Delegate", "Codex plans and reviews; Ambient handles audits, builds, and large asks."),
+    ("takeover", "Ambient session", "Ambient is the direct chat and work engine for this session."),
+)
+
+CONTROL_WORKFLOWS = (
+    ("audit this diff", "second-opinion review of the current git diff"),
+    ("audit this repo", "repository-level review"),
+    ("build <task>", "draft file changes for Codex to inspect before applying"),
+    ("ask Ambient <question>", "ask the chat model directly"),
+    ("show Ambient usage", "show local usage and optional relative savings"),
+    ("diagnose Ambient", "run key, funds, model, network, and service checks"),
+)
+
+CONTROL_CHAT_ACTIONS = (
+    ("set one model for all work", "set the same default for chat/review and code/build work"),
+    ("browse available models", "view serving and on-demand models without changing a default"),
+    ("change chat/review model", "override the model for asks and audits only"),
+    ("change code/build model", "override the model for code, builds, and agent work only"),
+    ("change mode", "choose normal Codex, delegate, or an Ambient session"),
+    ("change settings", "edit streaming, fallback, and optional savings"),
+)
+
+
+SETUP_PREAMBLE = f"""Ambient setup — one-time key configuration
+Ambient (ambient.xyz) is a decentralized network serving open-source models
+on demand behind one OpenAI-compatible API; you pay per token.
+
+Don't have a key yet?
+  1. Sign in or create an account:  {KEY_CONSOLE_URL}
+  2. Open: API Keys
+  3. Create a key and copy it (it is shown only once).
+
+Paste your key below — input is hidden, and nothing is stored until it verifies."""
+
+
+OPENCODE_CONFIG_PATH = os.path.expanduser("~/.config/opencode/opencode.json")
+# opencode keeps ONE global config shared by every tool on the machine; namespace
+# our provider so two Ambient installs never fight over a single entry.
+OPENCODE_PROVIDER = LAUNCHER_NAME
+
+
+class _Parser(argparse.ArgumentParser):
+    """Usage errors exit 64 (EX_USAGE), not argparse's default 2 — exit 2 is
+    reserved for PARTIAL results, and agentic callers must be able to tell
+    "my flags were wrong" from "coverage was incomplete". Mistyped subcommands
+    get a did-you-mean."""
+
+    def error(self, message):
+        extra = ""
+        m = re.search(r"invalid choice: '([^']+)'", message)
+        if m:
+            cand = re.search(r"choose from (.+)\)", message)
+            choices = ([c.strip().strip("'") for c in cand.group(1).split(",")]
+                       if cand else [])
+            close = difflib.get_close_matches(m.group(1), choices, n=1, cutoff=0.5)
+            if close:
+                extra = f"\ndid you mean: {close[0]}?"
+        if _json_in_argv():
+            # The --json failure contract is TOTAL: even argparse's own
+            # rejections reach a machine caller as the envelope (exit 64),
+            # never prose. --help and successful parses are untouched.
+            emit_json_error(_argv_command(), "usage", f"{message}{extra}",
+                            exit_code=EXIT_USAGE)
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE,
+                  f"{self.prog}: error: {message}{extra}\ntry: {self.prog} -h\n")
+
+
+(add_common_flags, _add_best_of_flag, _configure_version, _configure_models, _configure_curate, _configure_setup, _configure_link, _configure_uninstall, cmd_uninstall, _configure_cache, _configure_trust_url, _configure_usage, _configure_mode, _configure_config, _configure_control, _configure_doctor, _configure_use, _configure_ask, _configure_audit, _configure_map, _configure_code, _configure_chat, _configure_build, _configure_agent, _configure_codex, _cmd_version, _cmd_models_keyless, _cmd_trust_url_dispatch, _cmd_codex_keyless, _audit_keyless_route, _registry_handler, build_parser, _parse_args_with_stdin_dash, main, shielded_main) = _cli_entrypoint.build(
+    globals(), "add_common_flags _add_best_of_flag _configure_version _configure_models _configure_curate _configure_setup _configure_link _configure_uninstall cmd_uninstall _configure_cache _configure_trust_url _configure_usage _configure_mode _configure_config _configure_control _configure_doctor _configure_use _configure_ask _configure_audit _configure_map _configure_code _configure_chat _configure_build _configure_agent _configure_codex _cmd_version _cmd_models_keyless _cmd_trust_url_dispatch _cmd_codex_keyless _audit_keyless_route _registry_handler build_parser _parse_args_with_stdin_dash main shielded_main")
+
+
+# --- Declarative command registry -------------------------------
+# ONE table drives BOTH argparse construction and dispatch — replacing the old
+# dual mechanism (a pre-credential if-chain + a post-credential handlers dict).
+# Each entry:
+#   name           the subcommand
+#   configure      builds the subparser (owns its own flags/help text)
+#   handler        NAME of the handler function — resolved via module globals
+#                  at dispatch time (tests monkeypatch cmd_* attributes)
+#   needs_key      True → load_config() first (exit 3 when unconfigured) and
+#                  handler(args, api_key, api_url, conf); False → handler(args)
+#   pre_env        dispatch BEFORE the HOME check / numeric clamps (version)
+#   keyless_route  NAME of a predicate(args) -> handler-name-or-None: lets a
+#                  needs_key command short-circuit a pure-local sub-mode
+#                  (audit --install-hook) before any credentials are needed
+
+
+COMMANDS = _cli_dispatch.make_command_registry({
+    "version": _configure_version, "models": _configure_models,
+    "curate": _configure_curate, "setup": _configure_setup,
+    "link": _configure_link, "uninstall": _configure_uninstall,
+    "cache": _configure_cache, "trust-url": _configure_trust_url,
+    "usage": _configure_usage, "mode": _configure_mode,
+    "config": _configure_config, "control": _configure_control,
+    "doctor": _configure_doctor, "use": _configure_use,
+    "ask": _configure_ask, "audit": _configure_audit,
+    "map": _configure_map, "code": _configure_code,
+    "chat": _configure_chat, "build": _configure_build,
+    "agent": _configure_agent, "codex": _configure_codex,
+})
+
+
+if __name__ == "__main__":
+    shielded_main()

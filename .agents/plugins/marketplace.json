@@ -1,0 +1,20 @@
+{
+  "name": "ambient-codex",
+  "interface": {
+    "displayName": "Ambient Codex"
+  },
+  "plugins": [
+    {
+      "name": "ambient-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ambient-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

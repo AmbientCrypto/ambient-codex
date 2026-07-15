@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambient-codex"
+version = "1.0.0"                        # keep in sync with .codex-plugin/plugin.json + bin/ambient __version__
+description = "Official Ambient Codex integration for chat, audits, code, and builds"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["ambient", "llm", "code-review", "codex", "inference", "delegation"]
+dependencies = []                       # stdlib only — no third-party runtime deps
+
+[project.urls]
+Homepage = "https://github.com/AmbientCrypto/ambient-codex"
+
+# Keep the extensionless public CLI while installing the internal refactor
+# package exactly once. Source/plugin execution imports the bundled root package;
+# pip/pipx execution imports the same package from site-packages.
+[tool.setuptools]
+script-files = ["bin/ambient"]
+packages = ["ambient_codex"]            # explicit: never auto-discover tests/docs
+py-modules = []
+
+[tool.pytest.ini_options]
+# Canonical runner is `python3 -m unittest discover -s tests -t .`; this only lets
+# `pytest tests/` collect despite the sibling-module imports (tests/ is a pkg).
+pythonpath = ["tests"]
+
+[tool.ruff]
+# `bin/ambient` has no .py suffix, so a bare `ruff check .` silently skips the entire
+# 12.9k-line CLI — a planted unused import passed clean. Lint it explicitly.
+extend-include = ["bin/ambient"]
