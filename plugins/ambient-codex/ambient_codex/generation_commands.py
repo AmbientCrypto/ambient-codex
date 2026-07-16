@@ -399,10 +399,17 @@ BUILD_PLAN_SCHEMA = {
                     "path": {"type": "string"},
                     "purpose": {"type": "string"},
                     "est_lines": {"type": "integer"},
+                    "est_bytes": {"type": "integer"},
+                    "workstream": {"type": "string"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": ["path", "purpose", "est_lines"],
             },
         },
+        "project_brief": {"type": "string"},
         "notes": {"type": "string"},
         "advisory_steps": {"type": "array", "items": {"type": "string"}},
     },
@@ -429,26 +436,33 @@ BUILD_FILES_SCHEMA = {
     "required": ["files"],
 }
 
-BUILD_PLAN_PROMPT = """You are a senior software engineer planning a build.
-Given a task (and optional context), design the complete set of files to create.
+BUILD_PLAN_PROMPT = """You are a senior production lead planning a build.
+Given a task (and optional context), design the complete set of files to create,
+including creative, marketing, document, web, and software artifacts when asked.
 Output ONLY a JSON object matching the requested schema. Path rules: RELATIVE,
 forward slashes, no '..' segments, no leading '/', never under .git, no
 credential-style files (.env, id_rsa, *.pem, credentials.json). Keep the set
-minimal but COMPLETE — a working result, not a sketch. est_lines = your honest
-line-count estimate per file. advisory_steps = commands the USER may want to run
-afterwards (install deps, run tests) — informational text only, they will NOT be
-executed. notes = 1-3 sentences on the design."""
+minimal but COMPLETE — a working result, not a sketch. Decompose large artifacts
+into composable files instead of planning a monolith that cannot fit one model
+answer. est_lines and est_bytes must be honest estimates. workstream groups
+related artifacts. depends_on lists only other planned paths that must be
+generated first. project_brief preserves exact shared names, interfaces, routes,
+design tokens, voice, factual disclaimers, and acceptance constraints across all
+files. advisory_steps = commands the USER may want to run afterwards (install
+deps, run tests) — informational text only, they will NOT be executed. notes =
+1-3 sentences on the design."""
 
 BUILD_JSON_INSTRUCTION_PLAN = (
     "\n\nOUTPUT FORMAT: return ONLY a JSON object (no prose, no markdown fences) "
-    'matching: {"plan":[{"path":str,"purpose":str,"est_lines":int}],'
-    '"notes":str,"advisory_steps":[str]}'
+    'matching: {"plan":[{"path":str,"purpose":str,"est_lines":int,'
+    '"est_bytes":int,"workstream":str,"depends_on":[str]}],'
+    '"project_brief":str,"notes":str,"advisory_steps":[str]}'
 )
 
-BUILD_GEN_PROMPT = """You are a senior software engineer generating COMPLETE files
-for a planned build. Produce the FULL content of every requested file — production
-quality, no placeholders, no TODOs, imports correct across files. Use exactly the
-requested relative paths.
+BUILD_GEN_PROMPT = """You are an expert production team generating COMPLETE files
+for an approved build plan. Produce the FULL content of every requested file —
+production quality, no placeholders, no TODOs, cross-file references correct.
+Preserve the shared project brief exactly. Use exactly the requested relative paths.
 
 OUTPUT FORMAT — emit ONE file per line as a standalone JSON object:
 {"path":"<relative/path>","content":"<full file content>"}

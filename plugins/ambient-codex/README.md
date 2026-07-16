@@ -62,19 +62,29 @@ Normal Codex mode. Model defaults and settings persist separately.
 - `ask` for short questions and second opinions.
 - `audit` for files, diffs, staged changes, repositories, and consensus review.
 - `code` for focused drafts with selected context.
-- `build` for resumable multi-file generation and validated file writes.
+- `build` for capacity-aware multi-file generation, automatic plan refinement,
+  dependency-aware parallel workstream waves, resumable state, and validated
+  incremental file writes.
 - `map` for parallel work across many files.
 - `agent` for the bundled terminal-agent lane.
 
 Chat/review and code/build may use separate model defaults. Live model metadata
 drives context limits, output budgets, reasoning allowances, chunking, and
-hierarchical reduction. A concrete model is never silently replaced unless
-fallback is enabled.
+hierarchical reduction. Build artifact targets and generation budgets derive
+from those live capabilities rather than model-name tables, so newly cataloged
+models inherit the same safety contract. A concrete model is never silently
+replaced unless fallback is enabled.
 
 Large repository audits track non-overlapping shards and coverage gaps. Builds
-retain complete generated files and requeue missing artifacts after truncation.
-Long healthy jobs have no elapsed-time cutoff; transport silence and genuine
-no-progress stalls remain bounded.
+refine plans that exceed safe artifact capacity, retain complete generated
+files, write accepted batches early under explicit headless consent, and requeue
+missing artifacts after truncation. File-cap omissions and oversized artifacts
+are reported as coverage gaps instead of clean completion. Long healthy jobs
+have no elapsed-time cutoff; transport silence and genuine no-progress stalls
+remain bounded.
+
+When a serving model exposes text-only output, visual generation means original
+SVG or other code-native artwork, not a claim of raster image-model output.
 
 ## Data and safety
 

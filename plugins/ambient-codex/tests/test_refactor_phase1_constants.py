@@ -63,6 +63,11 @@ MOVED_NAMES = (
     "FALLBACK_MAX_OUTPUT",
     "ABS_MAX_CHARS",
     "MAX_PARALLEL_CHUNKS",
+    "MAX_BUILD_FILES",
+    "MAX_BUILD_FILE_BYTES",
+    "BUILD_FAILURE_CIRCUIT_BREAKER",
+    "REASONING_BUILD_BATCH_FILES",
+    "DIRECT_BUILD_BATCH_FILES",
     "CODE_MAP_BUDGET_DEFAULT",
     "CODE_MAP_BUDGET_MAX",
     "CODE_MAP_SIGS_PER_FILE",
@@ -109,6 +114,9 @@ class InternalConstantsTests(unittest.TestCase):
         self.assertEqual(constants.DEFAULT_MODEL, "moonshotai/kimi-k2.7-code")
         self.assertEqual(constants.MAX_REQUESTED_TOKENS, 1_000_000)
         self.assertEqual(constants.ABS_MAX_CHARS, 20_000_000)
+        self.assertEqual(constants.MAX_BUILD_FILES, 512)
+        self.assertEqual(constants.MAX_BUILD_FILE_BYTES, 5_000_000)
+        self.assertEqual(constants.BUILD_FAILURE_CIRCUIT_BREAKER, 3)
         self.assertEqual(constants.REPO_FILE_MAX_BYTES, constants.ABS_MAX_CHARS)
         self.assertIsInstance(constants.REPO_SKIP_DIRS, frozenset)
         self.assertIsInstance(constants.REPO_LOCKFILES, frozenset)
