@@ -112,7 +112,7 @@ def budget_escalation_limit(value):
     except (TypeError, ValueError):
         parsed = DEFAULT_BUDGET_ESCALATIONS
     return max(
-        DEFAULT_BUDGET_ESCALATIONS,
+        0,
         min(MAX_BUDGET_ESCALATIONS, parsed),
     )
 

@@ -81,6 +81,52 @@ class BuildWorkflowTests(unittest.TestCase):
                 max_file_bytes=10,
                 safe_relpath=lambda path, root: (_ for _ in ()).throw(ValueError("unsafe")))
 
+    def test_resume_state_sanitizes_new_build_metadata(self):
+        core = importlib.import_module("ambient_codex.build_workflow")
+        digest = __import__("hashlib").sha256(b"ok").hexdigest()
+        state = {
+            "version": 1,
+            "task_sha": "task",
+            "plan": [{"path": "a.py"}],
+            "done": {"a.py": {"content": "ok", "sha256": digest}},
+            "failed": [],
+            "plan_failures": "poison",
+            "metrics": "poison",
+            "project_brief": ["poison"],
+            "target_file_bytes": float("inf"),
+        }
+
+        out = core.normalize_resume_state(
+            state, task_sha="task", root="/build", max_plan=2,
+            max_file_bytes=100, safe_relpath=lambda path, root: path)
+
+        self.assertEqual(out["plan_failures"], [])
+        self.assertEqual(out["metrics"], {})
+        self.assertEqual(out["project_brief"], "")
+        self.assertEqual(out["target_file_bytes"], 100)
+
+    def test_resume_state_preserves_bounded_parallel_wave_metrics(self):
+        core = importlib.import_module("ambient_codex.build_workflow")
+        state = {
+            "version": 1,
+            "task_sha": "task",
+            "plan": [{"path": "a.py"}],
+            "done": {},
+            "failed": [],
+            "metrics": {
+                "generation_waves": 4,
+                "maximum_parallel_generation_calls": 3,
+            },
+        }
+
+        out = core.normalize_resume_state(
+            state, task_sha="task", root="/build", max_plan=2,
+            max_file_bytes=100, safe_relpath=lambda path, root: path)
+
+        self.assertEqual(out["metrics"]["generation_waves"], 4)
+        self.assertEqual(
+            out["metrics"]["maximum_parallel_generation_calls"], 3)
+
     def test_plan_validation_caps_paths_and_does_not_mutate_model_payload(self):
         core = importlib.import_module("ambient_codex.build_workflow")
         proposed = [
@@ -158,7 +204,7 @@ class BuildWorkflowTests(unittest.TestCase):
             tuple(tuple(item["path"] for item in batch) for batch in batches),
             (("a.py",), ("b.py",)),
         )
-        self.assertEqual(max_calls, 10)
+        self.assertEqual(max_calls, 6)
 
     def test_generation_prompt_compacts_context_before_refusing_a_file(self):
         core = importlib.import_module("ambient_codex.build_workflow")
@@ -194,7 +240,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(recovery, ("b.py", "c.py"))
         self.assertEqual(failures, ())
 
-    def test_generation_recovery_retries_one_single_file_then_fails(self):
+    def test_generation_recovery_retries_two_single_file_calls_then_fails(self):
         core = importlib.import_module("ambient_codex.build_workflow")
         batch = ({"path": "a.py"},)
         first = core.generation_recovery(
@@ -203,10 +249,15 @@ class BuildWorkflowTests(unittest.TestCase):
         second = core.generation_recovery(
             batch, done_paths=(), failed_paths=(), response_meta={},
             attempts=dict(first[1]), recovery_paths=())
+        third = core.generation_recovery(
+            batch, done_paths=(), failed_paths=(), response_meta={},
+            attempts=dict(second[1]), recovery_paths=())
 
         self.assertEqual(first[0], (batch,))
         self.assertEqual(first[1], (("a.py", 1),))
-        self.assertEqual(second[0], ())
+        self.assertEqual(second[0], (batch,))
         self.assertEqual(second[1], (("a.py", 2),))
-        self.assertEqual(second[3][0][0], "a.py")
-        self.assertIn("after 2 attempts", second[3][0][1])
+        self.assertEqual(third[0], ())
+        self.assertEqual(third[1], (("a.py", 3),))
+        self.assertEqual(third[3][0][0], "a.py")
+        self.assertIn("after 3 attempts", third[3][0][1])

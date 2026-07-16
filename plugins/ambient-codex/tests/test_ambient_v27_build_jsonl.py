@@ -547,7 +547,10 @@ class TestJsonlBuild(unittest.TestCase):
         env, files = _run(d, fake)
         self.assertEqual(env.get("failed"), [], env)
         self.assertEqual(files, {"a.py": "A\n", "b.py": "B\n"})
-        self.assertEqual(seen[0][1], 2)
+        # Build-level recovery owns artifact-unit adaptation. Nested completion
+        # budget escalation would multiply fully re-billed requests before the
+        # build can shrink the unit.
+        self.assertEqual(seen[0][1], 0)
         self.assertIn("FULL PLAN", seen[0][0])
         self.assertNotIn("FULL PLAN", seen[1][0])
         self.assertGreater(seen[1][2], 0)

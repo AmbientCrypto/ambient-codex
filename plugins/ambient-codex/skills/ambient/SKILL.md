@@ -77,7 +77,10 @@ For delegated implementation:
    model must inspect a working tree.
 3. Treat output as untrusted. Review every hunk/file, run tests, and integrate.
 4. Retry a reasonable transient failure once. If the same brief fails twice,
-   finish locally and report the fallback.
+   finish locally and report the fallback, unless the user requires
+   Ambient-only authorship. Under an Ambient-only provenance constraint, never
+   author missing content locally; preserve the partial result and resume or
+   report the exact gap.
 
 When mode is `takeover` (shown to the user as **Ambient session**), the user is
 talking directly to Ambient through the Codex interface. Route conversation and
@@ -109,6 +112,34 @@ Do not force repository work, multi-file implementation, or oversized input thro
 context capacity, reasoning/output budget, chunk boundaries, and map-reduce
 compaction. Preserve partial/coverage signals rather than turning a truncated result
 into a clean answer.
+
+## Broad Build Programs
+
+Use `build` directly for broad multi-workstream programs such as a campaign,
+pitch deck, example website, brand system, documentation set, or repository
+feature. The build lane capacity-checks the complete plan before generation,
+asks Ambient to decompose oversized artifacts, orders declared dependencies,
+keeps workstreams in bounded batches, fans dependency-ready workstreams out
+through bounded `--parallel` waves, and incrementally writes completed files for
+explicit headless `--apply --yes` runs.
+
+1. Put scope, exclusions, acceptance criteria, shared names/tokens, and
+   provenance requirements in one precise brief.
+2. Let the CLI derive its safe per-artifact target. Do not manually inflate
+   `--max-tokens` to rescue a monolithic plan.
+3. If using `--plan-only`, continue with the exact same task, model, context,
+   caps, and generation options so the cached contract remains resumable.
+4. Treat a planning coverage gap as a stop signal. Do not generate from a
+   silently capped, dependency-broken, or oversized plan.
+5. On interruption or a partial generation envelope, resume the same command.
+   Completed records and explicitly authorized incremental writes are retained.
+6. Never replace a missing Ambient-authored artifact with Codex content when the
+   user requires sole Ambient authorship.
+
+When the live catalog exposes text-only output, Ambient can create original SVG,
+HTML/CSS, canvas, and other code-native visuals. Do not advertise those as
+raster image-model generation. Use raster/image wording only when a selected
+Ambient model explicitly advertises an image output modality.
 
 Native mode is held only in the current MCP connection: `ambient_set_mode` takes
 effect immediately, `off` ends it, and every fresh Codex session starts in Normal
@@ -153,12 +184,18 @@ stall detection, and a progressing stream has no elapsed-time wall by default.
    invocation. Report usable partial output and every coverage gap.
 
 Build uses record-framed JSONL and `.ambient-build.json` so complete files survive
-truncation and missing files can requeue. A reasoning-only or output-capped build
-attempt is an adaptive recovery signal: keep the Ambient build running so its
-selected model can retry the missing files with a smaller artifact unit and its
-own context-safe output ceiling. Do not cancel it or complete the same scoped
-build locally merely because it reached an output cap. Never claim a build
-completed unless the final envelope and local file/test verification agree.
+truncation and missing files can requeue. Planning rejects or refines oversized
+artifact units before generation. During generation, the build lane owns bounded
+artifact-unit recovery. A reasoning-only or output-capped reply is an adaptive recovery signal.
+A focused file's first attempt may use one context-safe
+reasoning escalation; multi-file batches and its two compact retries use none,
+so the retry tree cannot multiply escalation ladders. Dependency-ready workstreams run
+in bounded parallel waves while each workstream stays serialized. Explicit
+headless `--apply --yes` builds make
+accepted files durable as batches complete, then reconcile everything at the
+end. Do not cancel a healthy job or complete the same scoped build locally merely
+because one attempt reached an output cap. Never claim a build completed unless
+the final envelope and local file/test verification agree.
 
 ## Massive Repository Protocol
 
