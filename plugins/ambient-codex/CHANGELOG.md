@@ -2,6 +2,18 @@
 
 All notable changes to `ambient-codex`.
 
+## 1.0.2 - 2026-07-17
+
+- Hardened completion recovery so reasoning-only responses never become
+  deliverable code and do not silently trigger additional billed attempts.
+- Added learned final-answer health to automatic model routing while preserving
+  explicit model selection.
+- Added versioned, validated Ambient-only artifact contracts with exact prompt
+  hashes, recursive campaign bundles, per-output provenance, and deterministic
+  pitch-deck rendering.
+- Added atomic local plugin staging, synchronized cachebusted versions, verified
+  activation, and rollback when an install fails.
+
 ## 1.0.1 - 2026-07-16
 
 - Hardened broad multi-workstream builds with capacity-aware planning,

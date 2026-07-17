@@ -207,7 +207,7 @@ try:
 except ImportError:
     fcntl = None
 
-__version__ = "1.0.1"  # kept in sync with plugin.json + pyproject.toml (test- and CI-asserted)
+__version__ = "1.0.2"  # kept in sync with plugin.json + pyproject.toml (test- and CI-asserted)
 
 # Trees another Ambient install (or its host agent) owns. We never place our state
 # inside any of them, at any depth.
