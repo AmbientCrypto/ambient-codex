@@ -120,6 +120,8 @@ EXPECTED_DEFAULTS = {
     "_cache_salt": None,            # getattr(..., None)
     "escalation_ceiling": 65536,    # getattr(..., MAX_AUTO_BUDGET_TOKENS)
     "max_budget_escalations": 1,    # getattr(..., 1)
+    "accept_reasoning_draft": True, # conversational lanes may label/salvage;
+                                    # artifact/code lanes explicitly disable it
     "gate_fallback": True,          # getattr(..., True) — single-call lanes
                                     # re-gate a live --fallback swap; fan-out
                                     # workers set False (batch reserved it)

@@ -61,6 +61,7 @@ def run_completion(api_key, api_url, model, messages, args,
     model_profile = deps.model_profile
     pick_fallback_model = deps.pick_fallback_model
     read_config_file = deps.read_config_file
+    record_cap = deps.record_cap
     redact = deps.redact
     stream_completion = deps.stream_completion
     session = _session_or(session, api_key, api_url)
@@ -329,6 +330,7 @@ def run_completion(api_key, api_url, model, messages, args,
                       input_chars=sum(len(m.get("content") or "")
                                       for m in messages))
         if not isinstance(content, str) or not content.strip():
+            record_cap(model, "final_answer", False)
             # All budget spent on reasoning, nothing emitted: escalate ONCE,
             # bounded. The ceiling is the MODEL's real max output (from its
             # profile), not a flat 65536 — and we now start from a well-sized
@@ -353,7 +355,8 @@ def run_completion(api_key, api_url, model, messages, args,
                 continue
             reasoning = reasoning_text
             input_chars = sum(len(m.get("content") or "") for m in messages)
-            if len(reasoning) > 200 and input_chars < 20_000:
+            if (spec.accept_reasoning_draft
+                    and len(reasoning) > 200 and input_chars < 20_000):
                 # Small input, so splitting can't help: the thinking exists
                 # even though the answer doesn't — a labeled draft beats an
                 # empty hand.
@@ -373,10 +376,15 @@ def run_completion(api_key, api_url, model, messages, args,
                 return draft, usage, {"salvaged_partial": True,
                                       "reasoning_draft": True,
                                       "usage": usage, "_served_model": model}
+            retry_state = (
+                "retry disabled; no additional request was billed"
+                if budget_limit == 0
+                else "the explicitly allowed reasoning retry was exhausted"
+            )
             raise ChatError(
                 "empty",
-                f"'{model}' produced no final content even after budget "
-                f"escalation (finish_reason={finish}).",
+                f"'{model}' produced reasoning but no final content "
+                f"({retry_state}; finish_reason={finish}).",
             )
         if finish == "length":
             print(
@@ -390,6 +398,7 @@ def run_completion(api_key, api_url, model, messages, args,
         # told the content came from a model that wasn't serving.
         if isinstance(body, dict):
             body.setdefault("_served_model", model)
+        record_cap(model, "final_answer", True)
         return content.strip(), usage, body
     # Unreachable by construction: every `continue` above flips one guard
     # flag False→True and every guard requires its flag to be False, so the

@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambient.xyz/schemas/artifact-spec-v1.schema.json",
+  "title": "Ambient Artifact Specification v1",
+  "type": "object",
+  "required": ["ambient_artifact_version", "artifact", "provenance", "rendering", "content"],
+  "properties": {
+    "ambient_artifact_version": {"const": 1},
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "title", "scenario", "outputs"],
+      "properties": {
+        "kind": {
+          "enum": ["deck", "document", "site", "image_set", "campaign_bundle"]
+        },
+        "title": {"type": "string", "minLength": 1},
+        "scenario": {
+          "type": "object",
+          "required": ["fictional"],
+          "properties": {"fictional": {"type": "boolean"}},
+          "additionalProperties": false
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "creative_author",
+        "creative_authorship",
+        "model",
+        "prompt_sha256",
+        "codex_roles"
+      ],
+      "properties": {
+        "creative_author": {"const": "Ambient"},
+        "creative_authorship": {"const": "ambient-only"},
+        "model": {"type": "string", "minLength": 1},
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "codex_roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["orchestration", "verification", "deterministic-rendering"]
+          }
+        },
+        "generation_records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["model", "prompt_sha256", "outputs"],
+            "properties": {
+              "model": {"type": "string", "minLength": 1},
+              "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "outputs": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "rendering": {
+      "type": "object",
+      "required": ["engine", "engine_version", "font_policy", "asset_policy"],
+      "properties": {
+        "engine": {"type": "string", "minLength": 1},
+        "engine_version": {"type": "string", "minLength": 1},
+        "font_policy": {"type": "string", "minLength": 1},
+        "asset_policy": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "content": {"type": "object"}
+  },
+  "$defs": {
+    "size": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "element": {
+      "type": "object",
+      "required": ["type", "x", "y", "width", "height"],
+      "properties": {
+        "type": {"enum": ["text", "asset", "shape", "line"]},
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0},
+        "text": {"type": "string", "minLength": 1},
+        "asset": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "sourceFile": {
+      "type": "object",
+      "required": ["path", "media_type", "source"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "media_type": {
+          "enum": [
+            "image/svg+xml",
+            "text/css",
+            "text/html",
+            "text/javascript",
+            "text/markdown",
+            "text/plain"
+          ]
+        },
+        "source": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"artifact": {"properties": {"kind": {"const": "deck"}}}}},
+      "then": {
+        "properties": {
+          "content": {
+            "required": ["slide_size", "slides"],
+            "properties": {
+              "slide_size": {"$ref": "#/$defs/size"},
+              "slides": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["id", "title", "speaker_notes", "elements"],
+                  "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "speaker_notes": {"type": "string", "minLength": 1},
+                    "elements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/element"}}
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"artifact": {"properties": {"kind": {"const": "document"}}}}},
+      "then": {
+        "properties": {
+          "content": {
+            "required": ["page_size", "pages"],
+            "properties": {
+              "page_size": {"$ref": "#/$defs/size"},
+              "pages": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["id", "title", "elements"],
+                  "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "elements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/element"}}
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"artifact": {"properties": {"kind": {"const": "site"}}}}},
+      "then": {
+        "properties": {
+          "content": {
+            "required": ["entrypoint", "files"],
+            "properties": {
+              "entrypoint": {"type": "string", "minLength": 1},
+              "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sourceFile"}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"artifact": {"properties": {"kind": {"const": "image_set"}}}}},
+      "then": {
+        "properties": {
+          "content": {
+            "required": ["files"],
+            "properties": {
+              "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sourceFile"}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"artifact": {"properties": {"kind": {"const": "campaign_bundle"}}}}},
+      "then": {
+        "properties": {
+          "content": {
+            "required": ["artifacts"],
+            "properties": {
+              "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#"}}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

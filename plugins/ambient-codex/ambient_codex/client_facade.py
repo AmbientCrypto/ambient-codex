@@ -119,7 +119,7 @@ def _session_or(session, api_key, api_url, conf=None, *, deps):
     return deps['Session'](api_url=api_url, api_key=api_key, conf=conf or {})
 
 def _completion_dependencies(*, deps):
-    return deps['_facade_adapters'].bind(deps, deps['_completion_command'].CompletionDependencies.bind, 'AttemptState CHARS_PER_TOKEN ChatError DEFAULT_BUDGET_ESCALATIONS MAX_COMPLETE_ATTEMPTS MIN_OUTPUT_TOKENS NetworkError RequestSpec StallError _as_pos_int _budget_escalation_limit _effective_cpt _fallback_enabled _reasoning_str _session_or classify_error fetch_models log_usage model_profile pick_fallback_model read_config_file redact stream_completion')
+    return deps['_facade_adapters'].bind(deps, deps['_completion_command'].CompletionDependencies.bind, 'AttemptState CHARS_PER_TOKEN ChatError DEFAULT_BUDGET_ESCALATIONS MAX_COMPLETE_ATTEMPTS MIN_OUTPUT_TOKENS NetworkError RequestSpec StallError _as_pos_int _budget_escalation_limit _effective_cpt _fallback_enabled _reasoning_str _session_or classify_error fetch_models log_usage model_profile pick_fallback_model read_config_file record_cap redact stream_completion')
 
 def complete(api_key, api_url, model, messages, args, _stall_retried=False, _budget_retried=False, _fallback_retried=False, _budget_shrunk=False, on_delta=None, session=None, *, deps):
     return deps['_completion_command'].run_completion(api_key, api_url, model, messages, args, _stall_retried, _budget_retried, _fallback_retried, _budget_shrunk, on_delta, session, deps['_completion_dependencies']())

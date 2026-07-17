@@ -57,7 +57,7 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertNotIn("Beta", json.dumps(manifest))
         self.assertNotIn("Beta", json.dumps(marketplace))
         self.assertNotIn("Beta", skill_metadata)
-        self.assertEqual(manifest["version"], "1.0.1")
+        self.assertEqual(manifest["version"], "1.0.2")
         self.assertEqual(manifest["author"]["url"], "https://ambient.xyz")
 
     def test_repository_has_github_community_files(self):
