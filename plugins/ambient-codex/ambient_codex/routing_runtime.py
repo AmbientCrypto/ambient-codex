@@ -51,6 +51,7 @@ def resolve_auto_model(spec, catalog, conf, input_chars=0, args=None,
     _fail_exit = deps._fail_exit
     _humanize_ctx = deps._humanize_ctx
     _routing_core = deps._routing_core
+    cap_state = deps.cap_state
     curation = deps.curation
     is_hidden = deps.is_hidden
     model_profile = deps.model_profile
@@ -69,6 +70,23 @@ def resolve_auto_model(spec, catalog, conf, input_chars=0, args=None,
         if is_hidden(m["id"], allow, hide, show):
             continue
         candidates.append(m)
+
+    healthy_candidates = [
+        candidate for candidate in candidates
+        if cap_state(candidate["id"], "final_answer") != "unreliable"
+    ]
+    if healthy_candidates:
+        candidates = healthy_candidates
+    elif candidates:
+        names = ", ".join(candidate["id"] for candidate in candidates)
+        _fail_exit(
+            args,
+            _argv_command(),
+            "model",
+            f"{label} {spec}: every READY candidate has repeatedly produced "
+            f"reasoning without a final answer ({names}) — choose one "
+            "explicitly with -m to probe it again.",
+        )
 
     def _bail(msg):
         _fail_exit(args, _argv_command(), "model", msg,

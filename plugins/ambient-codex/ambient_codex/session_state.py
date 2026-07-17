@@ -59,6 +59,7 @@ class RequestSpec:
     _cache_salt: object = None
     escalation_ceiling: int = MAX_AUTO_BUDGET_TOKENS
     max_budget_escalations: int = DEFAULT_BUDGET_ESCALATIONS
+    accept_reasoning_draft: bool = True
     gate_fallback: bool = True
 
     @classmethod

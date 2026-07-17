@@ -392,6 +392,12 @@ def configure_code(sub, *, add_common, add_best_of):
     parser.add_argument("task", nargs="*", help="what to build, in plain words")
     parser.add_argument("-f", "--context", action="append", metavar="FILE",
                         help="context file the generation should match (repeatable)")
+    parser.add_argument(
+        "--reasoning-retries", type=int, choices=(0, 1), default=0,
+        dest="max_budget_escalations", metavar="N",
+        help="reasoning-only completion retries (default 0; use 1 only to "
+             "explicitly authorize a larger re-billed retry)")
+    parser.set_defaults(accept_reasoning_draft=False)
     parser.add_argument("--allow-secrets", action="store_true",
                         help="bypass the credentials tripwire (false positives only)")
     parser.add_argument("--json", action="store_true",

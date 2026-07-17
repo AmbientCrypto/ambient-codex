@@ -1,5 +1,24 @@
 # Releasing Ambient Codex
 
+## Safe local development installation
+
+Never edit or cachebust the Git-backed checkout under `.codex/.tmp/marketplaces`:
+Codex refreshes that directory during ordinary plugin commands and may erase
+uncommitted changes. Develop in a stable clone, run the full validation gates,
+then stage and switch through the bundled atomic installer:
+
+```bash
+python3 scripts/install_plugin_atomic.py \
+  /absolute/path/to/stable/ambient-codex \
+  /absolute/path/to/stable/local-marketplace \
+  --switch
+```
+
+The installer copies into a temporary sibling, synchronizes all four version
+surfaces, validates before activation, atomically replaces the stable local
+marketplace, verifies the installed version, and restores the `v1` remote
+marketplace if switching fails. It never changes the development source.
+
 This repository publishes a Codex plugin from `plugins/ambient-codex` and a
 local marketplace from `.agents/plugins/marketplace.json`.
 

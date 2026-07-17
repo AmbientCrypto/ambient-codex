@@ -308,6 +308,25 @@ class TestCompleteLadder(unittest.TestCase):
         # new_budget = min(max(2x, x+16384), ceiling) = min(24384, 30000)
         self.assertEqual(calls[1]["max_tokens"], 24384)
 
+    def test_code_cli_disables_reasoning_only_rebilling_by_default(self):
+        parsed = amb.build_parser().parse_args(["code", "repair", "one", "file"])
+        self.assertEqual(parsed.max_budget_escalations, 0)
+
+    def test_code_cli_can_explicitly_enable_one_reasoning_retry(self):
+        parsed = amb.build_parser().parse_args(
+            ["code", "repair", "one", "file", "--reasoning-retries", "1"])
+        self.assertEqual(parsed.max_budget_escalations, 1)
+
+    def test_zero_reasoning_retries_never_rebills_empty_completion(self):
+        fake, calls = stream_seq(ok_body(content="", reasoning="R" * 300))
+        with patched(amb, stream_completion=fake):
+            content, _u, body = amb.complete(
+                "k", "u", "m", [{"role": "user", "content": "small"}],
+                ns(max_budget_escalations=0))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("best-effort draft", content)
+        self.assertTrue(body.get("salvaged_partial"))
+
     def test_budget_400_halves_once(self):
         fake, calls = stream_seq(
             (400, {"error": {"message": "max_tokens exceeds model limit"}}),

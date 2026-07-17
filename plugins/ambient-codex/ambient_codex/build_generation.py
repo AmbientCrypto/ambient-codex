@@ -68,6 +68,7 @@ def generate_batch(request, deps):
     )
     generation_args = argparse.Namespace(**vars(request.args))
     generation_args.response_format = response_format
+    generation_args.accept_reasoning_draft = False
     generation_chars = len(deps.BUILD_GEN_PROMPT) + len(prompt)
     generation_ceiling = deps._context_safe_escalation_ceiling(
         request.profile, generation_chars, request.model_cpt)
@@ -90,12 +91,7 @@ def generate_batch(request, deps):
     else:
         generation_args.escalation_ceiling = max(
             generation_args.max_tokens, generation_ceiling)
-    attempts = dict(request.attempts)
-    generation_args.max_budget_escalations = (
-        1 if len(batch) == 1
-        and attempts.get(batch[0]["path"], 0) == 0
-        else 0
-    )
+    generation_args.max_budget_escalations = 0
     try:
         content, _usage, body = deps.complete(
             request.api_key,

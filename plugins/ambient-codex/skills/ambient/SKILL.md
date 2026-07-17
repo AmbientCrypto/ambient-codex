@@ -14,6 +14,11 @@ root and invoke its bundled `bin/ambient`; Codex must never
 run a bare `ambient` from PATH. Prefer Ambient MCP for bounded controls and the
 bundled CLI for long, streaming, piped, repository-sized, or file-writing work.
 
+Never develop inside Codex's Git-backed `.codex/.tmp/marketplaces` checkout;
+ordinary plugin commands may refresh and erase it. Use a stable clone and
+`scripts/install_plugin_atomic.py` for validated local staging, version
+synchronization, verified switching, and rollback.
+
 Never accept an API key in chat or tool arguments. Ambient Codex owns only the
 `ambient-codex` keychain item and `~/.config/ambient-codex` state. If setup is
 missing, show the First Run block below and stop.
@@ -33,6 +38,7 @@ missing, show the First Run block below and stop.
 | Bulk summarize/classify | Use bundled `map "PROMPT" FILE... --json`; JSON mode is JSONL, one result per item. |
 | Focused code draft | Use bundled `code "TASK" -f CONTEXT --json`; review before applying. |
 | Multi-file build | Use bundled `build "BRIEF" --dir TARGET --json --apply --yes`; review every file and run tests. |
+| Deck/document/site/image campaign | Have Ambient author the declarative artifact contract, validate it, then render deterministically. |
 | Working-tree agent | Use bundled `agent run "BRIEF"` in a scoped worktree/directory; use bundled `agent` only for the user's interactive TUI. |
 | Diagnose / usage | Call MCP doctor/usage or bundled `doctor` / `usage --json`. |
 
@@ -113,6 +119,42 @@ context capacity, reasoning/output budget, chunk boundaries, and map-reduce
 compaction. Preserve partial/coverage signals rather than turning a truncated result
 into a clean answer.
 
+Use `code` for exactly one requested output artifact, although it may receive
+several `-f` context files. Route multiple output files through `build` or split
+them into separate one-target `code` calls. Do not automatically re-bill a
+reasoning-only `code` completion. Add `--reasoning-retries 1` only when the user
+explicitly authorizes the larger retry. Report a reasoning-only completion as a
+model/runtime failure, then narrow the target or ask before selecting a different
+model. Never silently substitute for an exact model selection.
+
+## Declarative Artifacts And Provenance
+
+For decks, documents, websites, image sets, and campaign bundles, read
+`references/artifact-contract.md` and use
+`assets/artifact-spec-v1.schema.json`. Have Ambient author the creative content
+as a declarative JSON specification. Validate it with
+`scripts/artifact_contract.py` before using the applicable Codex artifact tool
+as a deterministic renderer. Do not ask Ambient to hand-code a renderer adapter
+when a deterministic renderer exists. Codex may translate the validated spec,
+render it, and verify it, but must not add creative content under an Ambient-only
+provenance constraint. Generate the final hash manifest only after every declared
+output exists and passes its artifact-specific checks.
+
+A mixed-format campaign must be one `campaign_bundle` containing complete
+nested artifact specifications. Do not hide a deck inside unconstrained bundle
+content: every nested deck, document, site, and image set must pass its own
+validator. Hash the exact brief bytes with `artifact_contract.py hash-prompt`;
+do not normalize newlines or reserialize the prompt first. Record renderer name
+and version plus explicit font and local-asset policies.
+
+An exact-model partial, truncation, or reasoning-only result may resume only
+with the identical model, brief bytes, options, and build cache. If the user
+explicitly authorizes a different Ambient model after final-answer failure,
+close that attempt and start a new build generation without reusing the prior
+cache. Declare every actual model in `provenance.models` and map each output
+exactly once in `generation_records`; never silently mix authorship or claim a
+single-model artifact after fallback.
+
 ## Broad Build Programs
 
 Use `build` directly for broad multi-workstream programs such as a campaign,
@@ -186,10 +228,11 @@ stall detection, and a progressing stream has no elapsed-time wall by default.
 Build uses record-framed JSONL and `.ambient-build.json` so complete files survive
 truncation and missing files can requeue. Planning rejects or refines oversized
 artifact units before generation. During generation, the build lane owns bounded
-artifact-unit recovery. A reasoning-only or output-capped reply is an adaptive recovery signal.
-A focused file's first attempt may use one context-safe
-reasoning escalation; multi-file batches and its two compact retries use none,
-so the retry tree cannot multiply escalation ladders. Dependency-ready workstreams run
+artifact-unit recovery. Treat a reasoning-only or output-capped reply as an
+adaptive recovery signal, never as deliverable content. Build generation calls
+disable completion-level budget escalation; only the build lane's preflighted,
+bounded compact retries may issue another request, so retry trees cannot multiply
+duplicate escalation ladders. Dependency-ready workstreams run
 in bounded parallel waves while each workstream stays serialized. Explicit
 headless `--apply --yes` builds make
 accepted files durable as batches complete, then reconcile everything at the

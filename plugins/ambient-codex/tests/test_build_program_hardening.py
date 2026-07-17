@@ -504,7 +504,7 @@ class BuildProgramIntegrationTests(unittest.TestCase):
         stdout, _stderr, code = _run(self.root, complete)
         self.assertEqual(code, 0, stdout)
 
-    def test_build_recovery_disables_completion_level_budget_amplification(self):
+    def test_build_never_enables_completion_level_budget_amplification(self):
         calls = {"count": 0}
         policies = []
 
@@ -525,7 +525,7 @@ class BuildProgramIntegrationTests(unittest.TestCase):
         stdout, _stderr, code = _run(self.root, complete)
         envelope = json.loads(stdout)
         self.assertEqual(code, 0, envelope)
-        self.assertEqual(policies, [1, 0])
+        self.assertEqual(policies, [0, 0])
 
     def test_terminal_batch_error_is_not_multiplied_by_sharding(self):
         calls = {"count": 0}
@@ -630,7 +630,7 @@ class BuildProgramIntegrationTests(unittest.TestCase):
         envelope = json.loads(stdout)
         self.assertEqual(code, 0, envelope)
         self.assertEqual(envelope["failed"], [])
-        self.assertEqual(policies, [1, 0, 0])
+        self.assertEqual(policies, [0, 0, 0])
 
     def test_repeated_empty_outputs_trip_a_fast_build_circuit_breaker(self):
         calls = {"count": 0}
