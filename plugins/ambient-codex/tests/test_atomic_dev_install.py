@@ -132,6 +132,7 @@ class AtomicInstallTests(unittest.TestCase):
 
     def test_successful_switch_verifies_expected_version(self):
         calls = []
+        marketplace = Path("/safe/local-marketplace")
 
         def runner(argv):
             calls.append(tuple(argv))
@@ -148,7 +149,7 @@ class AtomicInstallTests(unittest.TestCase):
             return {"status": "ok"}
 
         self.installer.switch_marketplace(
-            Path("/safe/local-marketplace"),
+            marketplace,
             expected_version="1.0.1+codex.test-123",
             runner=runner,
         )
@@ -158,7 +159,14 @@ class AtomicInstallTests(unittest.TestCase):
             [
                 ("codex", "plugin", "remove", "ambient-codex@ambient-codex", "--json"),
                 ("codex", "plugin", "marketplace", "remove", "ambient-codex", "--json"),
-                ("codex", "plugin", "marketplace", "add", "/safe/local-marketplace", "--json"),
+                (
+                    "codex",
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    str(marketplace),
+                    "--json",
+                ),
                 ("codex", "plugin", "add", "ambient-codex@ambient-codex", "--json"),
             ],
         )
